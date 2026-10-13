@@ -1,0 +1,52 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function participant() {
+      return signedIn() && request.auth.uid in resource.data.participantUids;
+    }
+
+    match /users/{userId}/appData/{documentId} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    // These documents are fetched by an exact SHA-256 username/email lookup.
+    // Listing the directory is not permitted.
+    match /userDirectory/{lookupId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/userDirectory/$(lookupId))
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email;
+      allow delete: if false;
+    }
+
+    match /sharedLoans/{loanId} {
+      allow get, list: if participant();
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.auth.uid in request.resource.data.participantUids
+        && request.resource.data.participantUids.size() == 2
+        && request.resource.data.lenderUid in request.resource.data.participantUids
+        && request.resource.data.borrowerUid in request.resource.data.participantUids
+        && request.resource.data.lenderUid != request.resource.data.borrowerUid
+        && request.resource.data.amount > 0
+        && request.resource.data.status == 'open';
+      allow update: if participant()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'settledAt', 'settledBy'])
+        && request.resource.data.status == 'settled'
+        && request.resource.data.settledBy == request.auth.uid;
+      allow delete: if false;
+    }
+  }
+}
